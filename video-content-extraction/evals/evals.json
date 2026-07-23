@@ -1,0 +1,24 @@
+{
+  "skill_name": "video-content-extraction",
+  "note": "运行这些评测需要能访问 huggingface.co 下载 whisper 模型的网络环境。测试视频可用 espeak-ng 合成语音 + ffmpeg 打包生成（见 eval 1 files 说明），或使用真实讲座视频。",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我这有个机器学习课程的录像 lecture.mp4，帮我整理一下：我要一份逐字稿、一张知识点脑图，还有详细的课堂笔记",
+      "expected_output": "输出目录中生成 transcript.md（带时间戳、按语义分段）、mindmap.md（含可渲染的 Mermaid mindmap，覆盖视频全部知识点）、notes.md（按内容章节组织、含核心要点和术语表）",
+      "files": ["lecture.mp4 - 用 espeak-ng 合成 2-3 分钟英文讲课音频（内容：梯度下降/神经网络/过拟合三个主题）+ ffmpeg 打包"]
+    },
+    {
+      "id": 2,
+      "prompt": "把这个视频 talk.mp4 转成文字就行，不用别的",
+      "expected_output": "只交付 transcript.md；不生成用户没要的脑图和笔记（或仅询问是否需要）；转录稿忠实、带时间戳",
+      "files": ["talk.mp4 - 合成语音视频"]
+    },
+    {
+      "id": 3,
+      "prompt": "帮我给 silent.mp4 做个内容脑图",
+      "expected_output": "检测到视频无音轨后不臆造内容：明确告知无法转录，改走抽帧路线或向用户说明限制",
+      "files": ["silent.mp4 - 无音轨的纯画面视频"]
+    }
+  ]
+}
