@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频内容提取 · 本地转录工具</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #1a1d21; --muted: #6b7280;
+    --accent: #4f46e5; --accent-soft: #eef2ff; --border: #e5e7eb;
+    --ok: #059669; --warn: #d97706;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111318; --card: #1b1e26; --ink: #e8eaf0; --muted: #9aa1ad;
+      --accent: #818cf8; --accent-soft: #26293a; --border: #2e323d;
+      --ok: #34d399; --warn: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 80px; }
+  h1 { font-size: 1.5rem; margin: 8px 0 4px; }
+  .sub { color: var(--muted); font-size: .9rem; margin-bottom: 20px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .drop {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 36px 20px;
+    text-align: center; cursor: pointer; transition: .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop input { display: none; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  label { font-size: .85rem; color: var(--muted); }
+  select, button {
+    font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card); color: var(--ink); cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .bar { height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; margin-top: 10px; display: none; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .status { font-size: .85rem; color: var(--muted); margin-top: 8px; min-height: 1.2em; }
+  .status.ok { color: var(--ok); }
+  .status.warn { color: var(--warn); }
+  #transcript {
+    white-space: pre-wrap; font-size: .92rem; max-height: 420px; overflow-y: auto;
+    background: var(--bg); border-radius: 8px; padding: 14px; margin-top: 12px;
+    font-variant-numeric: tabular-nums; display: none;
+  }
+  .hint { font-size: .82rem; color: var(--muted); margin-top: 10px; }
+  .hint code { background: var(--accent-soft); padding: 1px 5px; border-radius: 4px; }
+  .steps { font-size: .88rem; padding-left: 1.2em; margin: 6px 0 0; color: var(--muted); }
+  .steps li { margin: 3px 0; }
+  h2 { font-size: 1.05rem; margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎬 视频内容提取 · 本地转录工具</h1>
+  <div class="sub">全程在你的浏览器里运行，视频不上传到任何服务器，因此<b>没有文件大小限制</b>。转录完成后，把生成的提示词交给 Claude，即可得到知识点脑图和详细笔记。</div>
+
+  <div class="card">
+    <h2>① 选择视频 / 音频文件</h2>
+    <div class="drop" id="drop">
+      <input type="file" id="file" accept="video/*,audio/*">
+      <div id="dropText">点击选择或拖拽文件到这里<br><span style="font-size:.8rem;color:var(--muted)">支持 mp4 / webm / mov / mp3 / m4a / wav 等浏览器可解码的格式</span></div>
+    </div>
+    <div class="row">
+      <label>模型
+        <select id="model">
+          <option value="onnx-community/whisper-tiny">tiny（最快，精度低）</option>
+          <option value="onnx-community/whisper-base" selected>base（推荐）</option>
+          <option value="onnx-community/whisper-small">small（更准，较慢）</option>
+        </select>
+      </label>
+      <label>语言
+        <select id="lang">
+          <option value="">自动检测</option>
+          <option value="chinese">中文</option>
+          <option value="english">英文</option>
+        </select>
+      </label>
+      <button class="primary" id="go" disabled>开始转录</button>
+    </div>
+    <div class="bar" id="bar"><i></i></div>
+    <div class="status" id="status">等待选择文件…（首次使用需联网下载模型，之后会被浏览器缓存）</div>
+  </div>
+
+  <div class="card">
+    <h2>② 转录结果</h2>
+    <div id="transcript"></div>
+    <div class="row">
+      <button id="dlmd" disabled>⬇ 下载 transcript.md</button>
+      <button id="copyPrompt" disabled>📋 复制"生成脑图+笔记"提示词</button>
+    </div>
+    <div class="hint">复制提示词后，粘贴给 Claude（claude.ai 或 Claude Code 均可），它会按规范生成 Mermaid 知识点脑图和详细笔记。转录文字已包含在提示词里，<b>无需再上传视频</b>。</div>
+  </div>
+
+  <div class="card">
+    <h2>使用说明</h2>
+    <ol class="steps">
+      <li>推荐使用 Chrome / Edge 最新版（支持 WebGPU 加速；不支持时自动回退到 CPU，速度较慢）。</li>
+      <li>首次转录需从 huggingface.co 下载模型（tiny 约 40MB、base 约 80MB、small 约 250MB），之后离线可用。</li>
+      <li>超长视频（1 小时以上）受浏览器内存限制，建议先用 ffmpeg 切段：<code>ffmpeg -i in.mp4 -f segment -segment_time 1800 -c copy part_%02d.mp4</code></li>
+      <li>浏览器无法解码的格式（如部分 mkv/flv），先转成 mp4：<code>ffmpeg -i in.mkv -c copy out.mp4</code></li>
+    </ol>
+  </div>
+</div>
+
+<script type="module">
+const $ = id => document.getElementById(id);
+const drop = $('drop'), fileInput = $('file'), go = $('go'), statusEl = $('status');
+const bar = $('bar'), barFill = bar.querySelector('i'), out = $('transcript');
+let file = null, resultMd = '', plainText = '';
+
+function setStatus(msg, cls = '') { statusEl.textContent = msg; statusEl.className = 'status ' + cls; }
+function setBar(pct) { bar.style.display = 'block'; barFill.style.width = pct + '%'; }
+
+drop.addEventListener('click', () => fileInput.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.classList.remove('over');
+  if (e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => fileInput.files[0] && pick(fileInput.files[0]));
+
+function pick(f) {
+  file = f;
+  $('dropText').innerHTML = `✅ ${f.name}<br><span style="font-size:.8rem;color:var(--muted)">${(f.size / 1048576).toFixed(1)} MB</span>`;
+  go.disabled = false;
+  setStatus('文件就绪，点击"开始转录"');
+}
+
+function fmtTs(s) {
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = s % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+           : `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+async function decodeToMono16k(f) {
+  setStatus('正在解码音频…');
+  const buf = await f.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+  const audio = await ctx.decodeAudioData(buf).finally(() => ctx.close());
+  const n = audio.length, ch = audio.numberOfChannels;
+  const mono = audio.getChannelData(0).slice();
+  for (let c = 1; c < ch; c++) {
+    const d = audio.getChannelData(c);
+    for (let i = 0; i < n; i++) mono[i] += d[i];
+  }
+  if (ch > 1) for (let i = 0; i < n; i++) mono[i] /= ch;
+  return { pcm: mono, duration: audio.duration };
+}
+
+go.addEventListener('click', async () => {
+  if (!file) return;
+  go.disabled = true;
+  out.style.display = 'block';
+  out.textContent = '';
+  try {
+    const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6');
+
+    let pcm, duration;
+    try {
+      ({ pcm, duration } = await decodeToMono16k(file));
+    } catch (e) {
+      setStatus('浏览器无法解码这个文件的音频。请先用 ffmpeg 转成 mp4/mp3 再试。', 'warn');
+      go.disabled = false;
+      return;
+    }
+
+    const modelId = $('model').value;
+    const hasGPU = !!navigator.gpu;
+    setStatus(`正在加载模型 ${modelId.split('/')[1]}（${hasGPU ? 'WebGPU 加速' : 'CPU 模式'}），首次使用需下载…`);
+    let transcriber;
+    const progress = p => {
+      if (p.status === 'progress' && p.total) setBar(p.progress ?? (p.loaded / p.total * 100));
+    };
+    try {
+      transcriber = await pipeline('automatic-speech-recognition', modelId,
+        hasGPU ? { device: 'webgpu', dtype: 'fp32', progress_callback: progress }
+               : { progress_callback: progress });
+    } catch (e) {
+      setStatus('WebGPU 初始化失败，回退到 CPU 模式重新加载…');
+      transcriber = await pipeline('automatic-speech-recognition', modelId, { progress_callback: progress });
+    }
+
+    setBar(100);
+    setStatus(`转录中… 音频时长 ${fmtTs(duration)}，请耐心等待（进度会实时显示在下方）`);
+
+    const lang = $('lang').value;
+    const chunks = [];
+    const result = await transcriber(pcm, {
+      chunk_length_s: 30,
+      stride_length_s: 5,
+      return_timestamps: true,
+      ...(lang ? { language: lang, task: 'transcribe' } : {}),
+      callback_function: () => {},
+    });
+
+    const segs = result.chunks && result.chunks.length
+      ? result.chunks
+      : [{ timestamp: [0, duration], text: result.text }];
+    const lines = [];
+    for (const c of segs) {
+      const t = (c.text || '').trim();
+      if (!t) continue;
+      lines.push(`[${fmtTs(c.timestamp[0] ?? 0)}] ${t}`);
+    }
+    plainText = lines.join('\n');
+    resultMd = [
+      `# 转录初稿（未整理）`, ``,
+      `- 来源文件: ${file.name}`,
+      `- 时长: ${fmtTs(duration)}`,
+      `- 模型: whisper ${modelId.split('whisper-')[1]}（浏览器本地转录）`,
+      ``, plainText, ``
+    ].join('\n');
+
+    out.textContent = plainText || '（未识别到语音——请确认视频有人声音轨）';
+    setStatus(plainText ? `✅ 转录完成，共 ${lines.length} 段` : '未识别到语音内容', plainText ? 'ok' : 'warn');
+    $('dlmd').disabled = !plainText;
+    $('copyPrompt').disabled = !plainText;
+  } catch (e) {
+    console.error(e);
+    setStatus('出错了：' + (e.message || e) + '（首次使用请确认能访问 huggingface.co）', 'warn');
+  } finally {
+    go.disabled = false;
+  }
+});
+
+$('dlmd').addEventListener('click', () => {
+  const blob = new Blob([resultMd], { type: 'text/markdown;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'transcript.md';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+$('copyPrompt').addEventListener('click', async () => {
+  const prompt = `以下是一个视频的语音转录初稿（带时间戳，由 Whisper 本地转录，可能有少量同音字错误）。请基于它完成三件事：
+
+1. **整理转录稿**：按语义合并过碎的分段，每段保留开头时间戳；修正明显的同音字/专有名词错误（没把握的不改）；去掉无意义的口头禅，但不改写句子、不概括。
+2. **知识点脑图**：用 Mermaid mindmap 语法，根节点为视频主题，按知识结构（不按时间顺序）组织，覆盖视频中讲到的每个概念、方法、例子和结论；节点用短语，避免使用半角括号、冒号等 Mermaid 语法字符；图后附"分支速览"，给每个一级分支一句话说明和对应时间段。
+3. **详细笔记**：按内容章节组织（每节标注起始时间戳），记录论证过程和例子而不只是结论，主讲人强调的内容加粗；结尾给出核心要点清单、术语表（只用视频内给出的解释）。笔记必须忠实于转录内容，视频里没讲的不要写入正文。
+
+来源文件: ${file ? file.name : ''}
+
+---转录初稿开始---
+${plainText}
+---转录初稿结束---`;
+  await navigator.clipboard.writeText(prompt);
+  const btn = $('copyPrompt'), old = btn.textContent;
+  btn.textContent = '✅ 已复制，去粘贴给 Claude 吧';
+  setTimeout(() => { btn.textContent = old; }, 2500);
+});
+</script>
+</body>
+</html>
