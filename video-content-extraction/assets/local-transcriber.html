@@ -60,7 +60,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🎬 视频内容提取 · 本地转录工具</h1>
+  <h1>🎬 视频内容提取 · 本地转录工具 <span style="font-size:.7rem;color:var(--muted)">v2</span></h1>
   <div class="sub">全程在你的浏览器里运行，视频不上传到任何服务器，因此<b>没有文件大小限制</b>。转录完成后，把生成的提示词交给 Claude，即可得到知识点脑图和详细笔记。</div>
 
   <div class="card">
@@ -79,19 +79,26 @@
       </label>
       <label>语言
         <select id="lang">
+          <option value="chinese" selected>中文</option>
           <option value="">自动检测</option>
-          <option value="chinese">中文</option>
           <option value="english">英文</option>
         </select>
       </label>
+      <label>模型下载源
+        <select id="mirror">
+          <option value="https://hf-mirror.com" selected>hf-mirror.com（国内推荐）</option>
+          <option value="">huggingface.co（海外）</option>
+        </select>
+      </label>
       <button class="primary" id="go" disabled>开始转录</button>
+      <button id="stop" style="display:none">⏹ 停止并保留已转录部分</button>
     </div>
     <div class="bar" id="bar"><i></i></div>
-    <div class="status" id="status">等待选择文件…（首次使用需联网下载模型，之后会被浏览器缓存）</div>
+    <div class="status" id="status">等待选择文件…（首次使用需联网下载模型，之后会被浏览器缓存，可离线用）</div>
   </div>
 
   <div class="card">
-    <h2>② 转录结果</h2>
+    <h2>② 转录结果 <span id="live" style="font-size:.75rem;color:var(--muted)"></span></h2>
     <div id="transcript"></div>
     <div class="row">
       <button id="dlmd" disabled>⬇ 下载 transcript.md</button>
@@ -101,24 +108,25 @@
   </div>
 
   <div class="card">
-    <h2>使用说明</h2>
+    <h2>卡住了？排查清单</h2>
     <ol class="steps">
-      <li>推荐使用 Chrome / Edge 最新版（支持 WebGPU 加速；不支持时自动回退到 CPU，速度较慢）。</li>
-      <li>首次转录需从 huggingface.co 下载模型（tiny 约 40MB、base 约 80MB、small 约 250MB），之后离线可用。</li>
-      <li>超长视频（1 小时以上）受浏览器内存限制，建议先用 ffmpeg 切段：<code>ffmpeg -i in.mp4 -f segment -segment_time 1800 -c copy part_%02d.mp4</code></li>
-      <li>浏览器无法解码的格式（如部分 mkv/flv），先转成 mp4：<code>ffmpeg -i in.mkv -c copy out.mp4</code></li>
+      <li><b>一直停在"加载模型"</b>：国内网络连不上 huggingface.co——确认"模型下载源"选的是 <b>hf-mirror.com</b>（本版默认）。换源后重新点开始即可。</li>
+      <li><b>进度条走得极慢</b>：浏览器不支持 WebGPU 时会用 CPU，速度慢 5~10 倍。用最新版 Chrome / Edge，并可先换 tiny 模型试跑。</li>
+      <li>转录进行中会实时显示已完成百分比、预计剩余时间和已识别的文字；随时可点"停止"保留已完成部分。</li>
+      <li>超长视频（1 小时以上）受内存限制，建议先切段：<code>ffmpeg -i in.mp4 -f segment -segment_time 1800 -c copy part_%02d.mp4</code></li>
+      <li>浏览器无法解码的格式（部分 mkv/flv），先转 mp4：<code>ffmpeg -i in.mkv -c copy out.mp4</code></li>
     </ol>
   </div>
 </div>
 
 <script type="module">
 const $ = id => document.getElementById(id);
-const drop = $('drop'), fileInput = $('file'), go = $('go'), statusEl = $('status');
-const bar = $('bar'), barFill = bar.querySelector('i'), out = $('transcript');
-let file = null, resultMd = '', plainText = '';
+const drop = $('drop'), fileInput = $('file'), go = $('go'), stopBtn = $('stop'), statusEl = $('status');
+const bar = $('bar'), barFill = bar.querySelector('i'), out = $('transcript'), live = $('live');
+let file = null, resultMd = '', plainText = '', stopRequested = false;
 
 function setStatus(msg, cls = '') { statusEl.textContent = msg; statusEl.className = 'status ' + cls; }
-function setBar(pct) { bar.style.display = 'block'; barFill.style.width = pct + '%'; }
+function setBar(pct) { bar.style.display = 'block'; barFill.style.width = Math.min(100, pct) + '%'; }
 
 drop.addEventListener('click', () => fileInput.click());
 drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
@@ -142,9 +150,25 @@ function fmtTs(s) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
            : `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
+function fmtDur(s) {
+  s = Math.max(0, Math.round(s));
+  return s >= 60 ? `${Math.floor(s / 60)} 分 ${s % 60} 秒` : `${s} 秒`;
+}
+
+async function loadLib() {
+  const urls = [
+    'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6',
+    'https://unpkg.com/@huggingface/transformers@3.7.6',
+  ];
+  let lastErr;
+  for (const u of urls) {
+    try { return await import(u); } catch (e) { lastErr = e; }
+  }
+  throw new Error('无法加载 transformers.js 库（jsdelivr 和 unpkg 均失败），请检查网络：' + lastErr);
+}
 
 async function decodeToMono16k(f) {
-  setStatus('正在解码音频…');
+  setStatus('正在解码音频…（大文件可能需要一两分钟）');
   const buf = await f.arrayBuffer();
   const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
   const audio = await ctx.decodeAudioData(buf).finally(() => ctx.close());
@@ -158,13 +182,24 @@ async function decodeToMono16k(f) {
   return { pcm: mono, duration: audio.duration };
 }
 
+stopBtn.addEventListener('click', () => {
+  stopRequested = true;
+  stopBtn.disabled = true;
+  stopBtn.textContent = '正在停止…（等当前块转完）';
+});
+
 go.addEventListener('click', async () => {
   if (!file) return;
   go.disabled = true;
+  stopRequested = false;
   out.style.display = 'block';
   out.textContent = '';
+  live.textContent = '';
   try {
-    const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6');
+    setStatus('正在加载 transformers.js 库…');
+    const { pipeline, env } = await loadLib();
+    const mirror = $('mirror').value;
+    if (mirror) env.remoteHost = mirror;
 
     let pcm, duration;
     try {
@@ -177,11 +212,18 @@ go.addEventListener('click', async () => {
 
     const modelId = $('model').value;
     const hasGPU = !!navigator.gpu;
-    setStatus(`正在加载模型 ${modelId.split('/')[1]}（${hasGPU ? 'WebGPU 加速' : 'CPU 模式'}），首次使用需下载…`);
-    let transcriber;
+    setStatus(`正在下载/加载模型 ${modelId.split('/')[1]}（${hasGPU ? 'WebGPU 加速' : 'CPU 模式，速度较慢'}，来源：${mirror || 'huggingface.co'}）…`);
+    const seen = {};
     const progress = p => {
-      if (p.status === 'progress' && p.total) setBar(p.progress ?? (p.loaded / p.total * 100));
+      if (p.status === 'progress' && p.total) {
+        seen[p.file] = [p.loaded, p.total];
+        let loaded = 0, total = 0;
+        for (const [l, t] of Object.values(seen)) { loaded += l; total += t; }
+        setBar(loaded / total * 100);
+        setStatus(`下载模型中：${(loaded / 1048576).toFixed(1)} / ${(total / 1048576).toFixed(1)} MB（来源：${mirror || 'huggingface.co'}）`);
+      }
     };
+    let transcriber;
     try {
       transcriber = await pipeline('automatic-speech-recognition', modelId,
         hasGPU ? { device: 'webgpu', dtype: 'fp32', progress_callback: progress }
@@ -191,44 +233,69 @@ go.addEventListener('click', async () => {
       transcriber = await pipeline('automatic-speech-recognition', modelId, { progress_callback: progress });
     }
 
-    setBar(100);
-    setStatus(`转录中… 音频时长 ${fmtTs(duration)}，请耐心等待（进度会实时显示在下方）`);
-
+    // 分块转录：每块 120 秒 + 5 秒重叠，实时更新进度和已识别文字
+    const SR = 16000, BLOCK = 120, OVERLAP = 5;
     const lang = $('lang').value;
-    const chunks = [];
-    const result = await transcriber(pcm, {
-      chunk_length_s: 30,
-      stride_length_s: 5,
-      return_timestamps: true,
-      ...(lang ? { language: lang, task: 'transcribe' } : {}),
-      callback_function: () => {},
-    });
-
-    const segs = result.chunks && result.chunks.length
-      ? result.chunks
-      : [{ timestamp: [0, duration], text: result.text }];
     const lines = [];
-    for (const c of segs) {
-      const t = (c.text || '').trim();
-      if (!t) continue;
-      lines.push(`[${fmtTs(c.timestamp[0] ?? 0)}] ${t}`);
+    const t0 = Date.now();
+    stopBtn.style.display = '';
+    stopBtn.disabled = false;
+    stopBtn.textContent = '⏹ 停止并保留已转录部分';
+
+    for (let blockStart = 0; blockStart < duration; blockStart += BLOCK) {
+      if (stopRequested) break;
+      const sliceStart = Math.max(0, blockStart - (blockStart > 0 ? OVERLAP : 0));
+      const sliceEnd = Math.min(duration, blockStart + BLOCK);
+      const slice = pcm.subarray(Math.floor(sliceStart * SR), Math.floor(sliceEnd * SR));
+
+      const res = await transcriber(slice, {
+        chunk_length_s: 30,
+        stride_length_s: 5,
+        return_timestamps: true,
+        ...(lang ? { language: lang, task: 'transcribe' } : {}),
+      });
+      const chunks = res.chunks && res.chunks.length
+        ? res.chunks
+        : [{ timestamp: [0, sliceEnd - sliceStart], text: res.text }];
+      for (const c of chunks) {
+        const t = (c.text || '').trim();
+        if (!t) continue;
+        const abs = (c.timestamp[0] ?? 0) + sliceStart;
+        if (blockStart > 0 && abs < blockStart - OVERLAP / 2) continue; // 去掉重叠区重复
+        lines.push(`[${fmtTs(abs)}] ${t}`);
+      }
+      out.textContent = lines.join('\n');
+      out.scrollTop = out.scrollHeight;
+
+      const done = Math.min(sliceEnd, duration);
+      const pct = done / duration * 100;
+      const elapsed = (Date.now() - t0) / 1000;
+      const eta = elapsed / done * (duration - done);
+      setBar(pct);
+      setStatus(`转录中：${pct.toFixed(0)}%（已处理 ${fmtTs(done)} / ${fmtTs(duration)}，已用 ${fmtDur(elapsed)}，预计还需 ${fmtDur(eta)}）`);
+      live.textContent = `实时输出 · ${lines.length} 段`;
     }
+
+    stopBtn.style.display = 'none';
     plainText = lines.join('\n');
     resultMd = [
       `# 转录初稿（未整理）`, ``,
       `- 来源文件: ${file.name}`,
-      `- 时长: ${fmtTs(duration)}`,
+      `- 时长: ${fmtTs(duration)}${stopRequested ? '（用户中途停止，仅含前半部分）' : ''}`,
       `- 模型: whisper ${modelId.split('whisper-')[1]}（浏览器本地转录）`,
       ``, plainText, ``
     ].join('\n');
 
     out.textContent = plainText || '（未识别到语音——请确认视频有人声音轨）';
-    setStatus(plainText ? `✅ 转录完成，共 ${lines.length} 段` : '未识别到语音内容', plainText ? 'ok' : 'warn');
+    setStatus(plainText
+      ? `✅ 转录${stopRequested ? '已停止，保留了已完成部分' : '完成'}，共 ${lines.length} 段，用时 ${fmtDur((Date.now() - t0) / 1000)}`
+      : '未识别到语音内容', plainText ? 'ok' : 'warn');
     $('dlmd').disabled = !plainText;
     $('copyPrompt').disabled = !plainText;
   } catch (e) {
     console.error(e);
-    setStatus('出错了：' + (e.message || e) + '（首次使用请确认能访问 huggingface.co）', 'warn');
+    stopBtn.style.display = 'none';
+    setStatus('出错了：' + (e.message || e) + '（若是模型下载失败，试试切换"模型下载源"）', 'warn');
   } finally {
     go.disabled = false;
   }
